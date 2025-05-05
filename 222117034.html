@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Demo Raytrace Bola Sederhana</title>
+    <style>
+        body { 
+            display: flex; 
+            justify-content: center; 
+            align-items: center; 
+            height: 100vh; 
+            margin: 0; 
+            background-color: #222; /* Latar belakang gelap */
+        }
+        canvas { 
+            border: 1px solid #555; 
+            background-color: #f0f0f0; /* Warna default canvas jika perlu */
+        }
+    </style>
+</head>
+<body>
+    <canvas id="raytraceCanvas" width="500" height="500"></canvas>
+
+    <!-- 1. Include gl-matrix (pastikan URL valid) -->
+    <!-- Menggunakan CDN dari cdnjs -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/gl-matrix/3.4.3/gl-matrix-min.js"></script>
+
+    <!-- 2. Main Script (Termasuk "Helper" Vector dan Logika Raytracing) -->
+    <script>
+        // --- Helper Section (Vector Operations using gl-matrix) ---
+        // Kita akan menggunakan vec3 dari glMatrix untuk operasi vektor 3D
+        const vec3 = glMatrix.vec3; 
+
+        // Fungsi pembantu untuk membuat kode lebih mudah dibaca
+        function v3_create(x = 0, y = 0, z = 0) {
+            return vec3.fromValues(x, y, z);
+        }
+
+        function v3_add(out, a, b) {
+            return vec3.add(out, a, b);
+        }
+
+        function v3_sub(out, a, b) {
+            return vec3.subtract(out, a, b);
+        }
+
+        function v3_scale(out, a, s) {
+            return vec3.scale(out, a, s);
+        }
+
+        function v3_dot(a, b) {
+            return vec3.dot(a, b);
+        }
+
+        function v3_length(a) {
+            return vec3.length(a);
+        }
+
+        function v3_normalize(out, a) {
+            return vec3.normalize(out, a);
+        }
+        // --- End of Helper Section ---
+
+        // --- Scene Definition ---
+        const sphere = {
+            center: v3_create(0, 0, -5), // Pusatkan bola di (0, 0, -5)
+            radius: 1.5,                 // Radius bola
+            color: [200, 50, 50]         // Warna bola (Merah) [R, G, B]
+        };
+
+        const camera = {
+            origin: v3_create(0, 0, 0)   // Kamera di titik origin (0,0,0)
+        };
+
+        const canvasWidth = 500;
+        const canvasHeight = 500;
+        const aspectRatio = canvasWidth / canvasHeight;
+
+        // Viewport (bidang proyeksi di depan kamera)
+        // Kita buat sederhana saja, seolah-olah viewport ada di z = -1
+        const viewportHeight = 2.0;
+        const viewportWidth = aspectRatio * viewportHeight;
+        const focalLength = 1.0; // Jarak dari kamera ke viewport
+
+        // Hitung vektor-vektor yang mendefinisikan viewport
+        const viewport_horizontal = v3_create(viewportWidth, 0, 0);
+        const viewport_vertical = v3_create(0, viewportHeight, 0);
+        
+        // Hitung posisi pojok kiri bawah viewport
+        // lower_left = origin - horizontal/2 - vertical/2 - forward*focal_length
+        const half_horizontal = v3_scale(v3_create(), viewport_horizontal, 0.5);
+        const half_vertical = v3_scale(v3_create(), viewport_vertical, 0.5);
+        const forward_vector = v3_create(0, 0, focalLength); // Arah ke -Z
+
+        let lower_left_corner = v3_sub(v3_create(), camera.origin, half_horizontal);
+        v3_sub(lower_left_corner, lower_left_corner, half_vertical);
+        v3_sub(lower_left_corner, lower_left_corner, forward_vector);
+
+
+        // --- Ray-Sphere Intersection Function ---
+        // Fungsi ini menghitung apakah sebuah ray memotong bola
+        // Mengembalikan jarak (t) jika berpotongan, atau null jika tidak
+        function intersectSphere(rayOrigin, rayDirection, sphere) {
+            const oc = v3_create(); // Vektor dari origin ray ke pusat bola
+            v3_sub(oc, rayOrigin, sphere.center);
+
+            const a = v3_dot(rayDirection, rayDirection); // Harus 1 jika direction sudah normal
+            const half_b = v3_dot(oc, rayDirection);
+            const c = v3_dot(oc, oc) - sphere.radius * sphere.radius;
+            const discriminant = half_b * half_b - a * c;
+
+            if (discriminant < 0) {
+                return null; // Tidak ada perpotongan
+            } else {
+                // Cari akar kuadrat (jarak perpotongan)
+                const sqrt_discriminant = Math.sqrt(discriminant);
+                
+                // Cari t (jarak) terdekat yang positif
+                let t = (-half_b - sqrt_discriminant) / a;
+                if (t > 0.001) { // Epsilon kecil untuk menghindari self-intersection
+                    return t;
+                }
+                
+                t = (-half_b + sqrt_discriminant) / a;
+                 if (t > 0.001) {
+                    return t;
+                }
+
+                return null; // Perpotongan ada di belakang ray
+            }
+        }
+
+        // --- Main Raytracing Logic ---
+        function render() {
+            console.log("Mulai merender...");
+            const canvas = document.getElementById('raytraceCanvas');
+            if (!canvas) {
+                console.error("Canvas element not found!");
+                return;
+            }
+            const ctx = canvas.getContext('2d');
+            if (!ctx) {
+                console.error("Could not get 2D context!");
+                return;
+            }
+
+            const imageData = ctx.createImageData(canvasWidth, canvasHeight);
+            const data = imageData.data; // Array [R, G, B, A, R, G, B, A, ...]
+
+            const rayOrigin = camera.origin;
+            const rayDirection = v3_create(); // Akan dihitung ulang untuk tiap pixel
+
+            // Loop untuk setiap pixel di canvas
+            for (let j = 0; j < canvasHeight; j++) {
+                for (let i = 0; i < canvasWidth; i++) {
+                    
+                    // Ubah koordinat pixel (i, j) ke koordinat viewport (u, v)
+                    // (0,0) di canvas adalah kiri atas, tapi (0,0) di viewport kita adalah kiri bawah
+                    const u = i / (canvasWidth - 1);
+                    const v = (canvasHeight - 1 - j) / (canvasHeight - 1); // Balik koordinat j
+
+                    // Hitung arah ray untuk pixel ini
+                    // direction = lower_left_corner + u*horizontal + v*vertical - origin
+                    let targetPoint = v3_scale(v3_create(), viewport_horizontal, u); // u * horizontal
+                    let verticalOffset = v3_scale(v3_create(), viewport_vertical, v); // v * vertical
+                    v3_add(targetPoint, targetPoint, verticalOffset);           // u*h + v*v
+                    v3_add(targetPoint, targetPoint, lower_left_corner);       // ll + u*h + v*v
+
+                    v3_sub(rayDirection, targetPoint, rayOrigin); // target - origin
+                    v3_normalize(rayDirection, rayDirection);     // Normalisasi arah ray
+
+                    // --- Hitung Perpotongan ---
+                    const hitDistance = intersectSphere(rayOrigin, rayDirection, sphere);
+
+                    // --- Tentukan Warna Pixel ---
+                    const pixelIndex = (j * canvasWidth + i) * 4; // Index awal untuk RGBA pixel ini
+
+                    if (hitDistance !== null) {
+                        // Ray mengenai bola! Warnai dengan warna bola
+                        data[pixelIndex + 0] = sphere.color[0]; // R
+                        data[pixelIndex + 1] = sphere.color[1]; // G
+                        data[pixelIndex + 2] = sphere.color[2]; // B
+                        data[pixelIndex + 3] = 255;             // A (Opaque)
+                    } else {
+                        // Ray tidak mengenai bola. Warnai dengan warna background (misal biru langit sederhana)
+                        // Gradasi sederhana berdasarkan komponen Y arah ray
+                        const unit_direction = rayDirection; // Sudah normal
+                        const t_sky = 0.5 * (unit_direction[1] + 1.0); // Map Y (-1 to 1) ke (0 to 1)
+                        const skyColor1 = [255, 255, 255]; // Putih (atas)
+                        const skyColor2 = [135, 206, 250]; // Biru langit (bawah)
+
+                        data[pixelIndex + 0] = Math.floor((1.0 - t_sky) * skyColor1[0] + t_sky * skyColor2[0]); // R
+                        data[pixelIndex + 1] = Math.floor((1.0 - t_sky) * skyColor1[1] + t_sky * skyColor2[1]); // G
+                        data[pixelIndex + 2] = Math.floor((1.0 - t_sky) * skyColor1[2] + t_sky * skyColor2[2]); // B
+                        data[pixelIndex + 3] = 255; // A (Opaque)
+                        
+                        // Atau warna solid hitam jika lebih sederhana:
+                        // data[pixelIndex + 0] = 0; // R
+                        // data[pixelIndex + 1] = 0; // G
+                        // data[pixelIndex + 2] = 0; // B
+                        // data[pixelIndex + 3] = 255;// A
+                    }
+                }
+            }
+
+            // Gambar hasil perhitungan ke canvas
+            ctx.putImageData(imageData, 0, 0);
+            console.log("Rendering selesai.");
+        }
+
+        // --- Eksekusi ---
+        // Jalankan fungsi render ketika halaman selesai dimuat
+        window.onload = render;
+
+    </script>
+</body>
+</html>
